@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flappy Bird Clone</title>
+    <style>
+        /* Custom CSS for a classic game look */
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #333;
+            font-family: 'Press Start 2P', cursive;
+            user-select: none;
+            overflow: hidden;
+        }
+
+        #game-container {
+            position: relative;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.5);
+            border-radius: 8px;
+            overflow: hidden;
+            border: 8px solid #0d0d0d;
+        }
+
+        canvas {
+            background: linear-gradient(to bottom, #70c5ce 0%, #b8e9ed 100%);
+            display: block;
+            touch-action: manipulation; /* Important for mobile taps */
+            max-width: 90vw;
+            max-height: 90vh;
+            border-radius: 4px;
+        }
+
+        #score-display {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #ffffff;
+            text-shadow: 2px 2px 0 #000000;
+            font-size: 24px;
+            z-index: 10;
+        }
+
+        #game-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: none; /* Controlled by JS */
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background-color: rgba(0, 0, 0, 0.7);
+            z-index: 20;
+            text-align: center;
+        }
+
+        #game-overlay.active {
+            display: flex;
+        }
+
+        .overlay-title {
+            color: #ffcc00;
+            font-size: 30px;
+            margin-bottom: 10px;
+            text-shadow: 4px 4px 0 #8b0000;
+        }
+
+        .overlay-text {
+            color: #ffffff;
+            font-size: 14px;
+            margin-bottom: 25px;
+            max-width: 80%;
+        }
+
+        .start-button {
+            background-color: #4CAF50;
+            color: white;
+            border: 4px solid #38761d;
+            padding: 12px 24px;
+            font-family: 'Press Start 2P', cursive;
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 6px;
+            box-shadow: 0 4px 0 #38761d;
+            transition: all 0.1s ease;
+        }
+
+        .start-button:hover {
+            background-color: #5cb85c;
+        }
+
+        .start-button:active {
+            box-shadow: 0 1px 0 #38761d;
+            transform: translateY(3px);
+        }
+
+        /* Ensure responsiveness on small screens */
+        @media (max-width: 600px) {
+            #score-display {
+                font-size: 18px;
+                top: 10px;
+            }
+            .overlay-title {
+                font-size: 24px;
+            }
+            .overlay-text {
+                font-size: 12px;
+            }
+            .start-button {
+                font-size: 14px;
+                padding: 10px 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div id="score-display">Score: 0</div>
+    <canvas id="gameCanvas"></canvas>
+    <div id="game-overlay" class="active">
+        <h1 class="overlay-title">Flappy Clone</h1>
+        <p class="overlay-text">Click or Press SPACE to flap.<br>Avoid the pipes!</p>
+        <button class="start-button" onclick="startGame()">Start Game</button>
+    </div>
+</div>
+
+<script>
+    // Constants
+    const CANVAS_WIDTH = 500;
+    const CANVAS_HEIGHT = 700;
+    const GRAVITY = 0.5;
+    const LIFT = -10;
+    const PIPE_SPEED = 4;
+    const PIPE_WIDTH = 60;
+    const PIPE_GAP = 180;
+    const PIPE_SPAWN_INTERVAL = 120; // frames
+
+    // Game State
+    let canvas, ctx;
+    let score = 0;
+    let frame = 0;
+    let gameLoopId;
+    let gameState = 'waiting'; // 'waiting', 'playing', 'gameover'
+    let highscore = localStorage.getItem('flappyHighscore') || 0;
+
+    // Bird Object
+    const bird = {
+        x: 80,
+        y: CANVAS_HEIGHT / 2,
+        radius: 15,
+        velocity: 0,
+        color: '#ffcc00', // Yellow
+        flap() {
+            if (this.y > 0) { // Don't let it flap out of the top
+                this.velocity = LIFT;
+            }
+        },
+        update() {
+            this.velocity += GRAVITY;
+            this.y += this.velocity;
+            // Terminal velocity to prevent excessive speed
+            if (this.velocity > 15) this.velocity = 15;
+        },
+        draw() {
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Simple beak
+            ctx.fillStyle = '#ff6600';
+            ctx.beginPath();
+            ctx.moveTo(this.x + this.radius, this.y);
+            ctx.lineTo(this.x + this.radius + 8, this.y - 5);
+            ctx.lineTo(this.x + this.radius + 8, this.y + 5);
+            ctx.fill();
+        }
+    };
+
+    // Pipe Array
+    let pipes = [];
+
+    // Pipe Class
+    class Pipe {
+        constructor(x, y, gap, width) {
+            this.x = x;
+            this.y = y; // y is the center of the gap
+            this.gap = gap;
+            this.width = width;
+            this.scored = false;
+            this.pipeColor = '#4CAF50';
+            this.outlineColor = '#38761d';
+            this.capHeight = 25;
+        }
+
+        draw() {
+            // Top Pipe
+            const topHeight = this.y - this.gap / 2;
+            ctx.fillStyle = this.pipeColor;
+            ctx.strokeStyle = this.outlineColor;
+            ctx.lineWidth = 3;
+
+            // Top pipe body
+            ctx.fillRect(this.x, 0, this.width, topHeight);
+            ctx.strokeRect(this.x, 0, this.width, topHeight);
+
+            // Top pipe cap
+            ctx.fillRect(this.x - 5, topHeight - this.capHeight, this.width + 10, this.capHeight);
+            ctx.strokeRect(this.x - 5, topHeight - this.capHeight, this.width + 10, this.capHeight);
+
+
+            // Bottom Pipe
+            const bottomY = this.y + this.gap / 2;
+            const bottomHeight = CANVAS_HEIGHT - bottomY;
+
+            // Bottom pipe body
+            ctx.fillRect(this.x, bottomY, this.width, bottomHeight);
+            ctx.strokeRect(this.x, bottomY, this.width, bottomHeight);
+
+            // Bottom pipe cap
+            ctx.fillRect(this.x - 5, bottomY, this.width + 10, this.capHeight);
+            ctx.strokeRect(this.x - 5, bottomY, this.width + 10, this.capHeight);
+
+        }
+
+        update() {
+            this.x -= PIPE_SPEED;
+        }
+    }
+
+    // --- Utility Functions ---
+
+    function setupCanvas() {
+        canvas = document.getElementById('gameCanvas');
+        ctx = canvas.getContext('2d');
+        canvas.width = CANVAS_WIDTH;
+        canvas.height = CANVAS_HEIGHT;
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // MOVED: Initialize canvas input listeners here, AFTER canvas is defined
+        canvas.addEventListener('click', handleFlap);
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault(); // Prevent scrolling on touch
+            handleFlap();
+        });
+    }
+
+    function resizeCanvas() {
+        const container = document.getElementById('game-container');
+        // Calculate dynamic size based on aspect ratio (500:700)
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+
+        let scaleFactor = Math.min(vw / (CANVAS_WIDTH + 100), vh / (CANVAS_HEIGHT + 100), 1.0);
+
+        const newWidth = CANVAS_WIDTH * scaleFactor;
+        const newHeight = CANVAS_HEIGHT * scaleFactor;
+
+        container.style.width = `${newWidth}px`;
+        container.style.height = `${newHeight}px`;
+
+        // The canvas itself stays fixed size for drawing, we scale the container
+        // This makes sure the pixel drawing stays consistent regardless of screen size.
+    }
+
+    function createNewPipe() {
+        const minHeight = PIPE_GAP / 2 + 50;
+        const maxHeight = CANVAS_HEIGHT - PIPE_GAP / 2 - 50;
+        // Random center Y position for the gap
+        const yCenter = Math.random() * (maxHeight - minHeight) + minHeight;
+
+        pipes.push(new Pipe(CANVAS_WIDTH, yCenter, PIPE_GAP, PIPE_WIDTH));
+    }
+
+    function checkCollision() {
+        // 1. Check canvas bounds
+        if (bird.y + bird.radius > CANVAS_HEIGHT || bird.y - bird.radius < 0) {
+            return true;
+        }
+
+        // 2. Check pipe collisions
+        for (let i = 0; i < pipes.length; i++) {
+            const p = pipes[i];
+
+            // A. Check if bird is horizontally aligned with the pipe
+            if (bird.x + bird.radius > p.x && bird.x - bird.radius < p.x + p.width) {
+                const topPipeBoundary = p.y - p.gap / 2;
+                const bottomPipeBoundary = p.y + p.gap / 2;
+
+                // B. Check if bird hits top or bottom pipe
+                if (bird.y - bird.radius < topPipeBoundary || bird.y + bird.radius > bottomPipeBoundary) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    function updateScore() {
+        for (let i = 0; i < pipes.length; i++) {
+            const p = pipes[i];
+            // Check if bird passed the pipe's center line and hasn't scored yet
+            if (p.x + p.width < bird.x - bird.radius && !p.scored) {
+                score++;
+                p.scored = true;
+                document.getElementById('score-display').textContent = `Score: ${score}`;
+            }
+        }
+    }
+
+    function gameOver() {
+        gameState = 'gameover';
+        cancelAnimationFrame(gameLoopId);
+        
+        // Update Highscore
+        if (score > highscore) {
+            highscore = score;
+            localStorage.setItem('flappyHighscore', highscore);
+        }
+
+        const overlay = document.getElementById('game-overlay');
+        const title = overlay.querySelector('.overlay-title');
+        const text = overlay.querySelector('.overlay-text');
+        const button = overlay.querySelector('.start-button');
+
+        title.textContent = 'Game Over!';
+        text.innerHTML = `Your Score: ${score}<br>High Score: ${highscore}`;
+        button.textContent = 'Play Again';
+        overlay.classList.add('active');
+    }
+
+    // --- Game Loop and Control ---
+
+    function resetGame() {
+        score = 0;
+        frame = 0;
+        pipes = [];
+        bird.y = CANVAS_HEIGHT / 2;
+        bird.velocity = 0;
+        document.getElementById('score-display').textContent = `Score: 0`;
+    }
+
+    function startGame() {
+        resetGame();
+        document.getElementById('game-overlay').classList.remove('active');
+        gameState = 'playing';
+        gameLoop();
+    }
+
+    function gameLoop() {
+        if (gameState === 'playing') {
+            // 1. Clear Canvas
+            ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+            // 2. Update and Draw Bird
+            bird.update();
+            bird.draw();
+
+            // 3. Generate Pipes
+            if (frame % PIPE_SPAWN_INTERVAL === 0) {
+                createNewPipe();
+            }
+
+            // 4. Update and Draw Pipes, and remove old ones
+            for (let i = pipes.length - 1; i >= 0; i--) {
+                pipes[i].update();
+                pipes[i].draw();
+
+                // Remove pipe if off-screen
+                if (pipes[i].x + pipes[i].width < 0) {
+                    pipes.splice(i, 1);
+                }
+            }
+
+            // 5. Check Game Logic
+            updateScore();
+            if (checkCollision()) {
+                gameOver();
+            }
+
+            frame++;
+            gameLoopId = requestAnimationFrame(gameLoop);
+        }
+    }
+
+    // --- Input Handlers ---
+
+    function handleFlap() {
+        if (gameState === 'playing') {
+            bird.flap();
+        } else if (gameState === 'gameover' || gameState === 'waiting') {
+            // Auto-start if waiting or play again if game over
+            startGame();
+        }
+    }
+
+    // Keyboard Input (Relies only on window, safe to keep outside setupCanvas)
+    window.addEventListener('keydown', (e) => {
+        if (e.code === 'Space' || e.key === ' ') {
+            e.preventDefault(); // Prevent spacebar from scrolling
+            handleFlap();
+        }
+    });
+
+    // Initialize everything on load
+    window.onload = setupCanvas;
+
+</script>
+</body>
+</html>
